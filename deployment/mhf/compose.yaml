@@ -1,0 +1,131 @@
+# Marion Hughes Foundation: isolated Docker Compose deployment template.
+# This is a self-hosting starting point; complete the security/operations checklist
+# in README.md before exposing the service to the public internet.
+# Pin image digests after validation; do not auto-update production images blindly.
+services:
+  postiz:
+    image: ghcr.io/gitroomhq/postiz-app:latest
+    restart: unless-stopped
+    ports:
+      # Localhost only. Put an HTTPS reverse proxy in front of this port.
+      - "127.0.0.1:4007:5000"
+    environment:
+      MAIN_URL: ${POSTIZ_PUBLIC_URL:?Set POSTIZ_PUBLIC_URL in .env}
+      FRONTEND_URL: ${POSTIZ_PUBLIC_URL:?Set POSTIZ_PUBLIC_URL in .env}
+      NEXT_PUBLIC_BACKEND_URL: ${POSTIZ_PUBLIC_URL:?Set POSTIZ_PUBLIC_URL in .env}/api
+      BACKEND_INTERNAL_URL: http://localhost:3000
+      JWT_SECRET: ${POSTIZ_JWT_SECRET:?Set POSTIZ_JWT_SECRET in .env}
+      DATABASE_URL: postgresql://postiz:${POSTIZ_DB_PASSWORD:?Set POSTIZ_DB_PASSWORD in .env}@postgres:5432/postiz
+      REDIS_URL: redis://redis:6379
+      TEMPORAL_ADDRESS: temporal:7233
+      IS_GENERAL: "true"
+      # Switch to true only AFTER you have created and tested your admin account.
+      DISABLE_REGISTRATION: ${DISABLE_REGISTRATION:-false}
+      STORAGE_PROVIDER: local
+      UPLOAD_DIRECTORY: /uploads
+      NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads
+      TZ: Africa/Johannesburg
+      # Social OAuth credentials must be added in .env and explicitly forwarded
+      # here only for providers you set up. See README.md.
+      FACEBOOK_APP_ID: ${FACEBOOK_APP_ID:-}
+      FACEBOOK_APP_SECRET: ${FACEBOOK_APP_SECRET:-}
+      THREADS_APP_ID: ${THREADS_APP_ID:-}
+      THREADS_APP_SECRET: ${THREADS_APP_SECRET:-}
+      LINKEDIN_CLIENT_ID: ${LINKEDIN_CLIENT_ID:-}
+      LINKEDIN_CLIENT_SECRET: ${LINKEDIN_CLIENT_SECRET:-}
+      YOUTUBE_CLIENT_ID: ${YOUTUBE_CLIENT_ID:-}
+      YOUTUBE_CLIENT_SECRET: ${YOUTUBE_CLIENT_SECRET:-}
+      TIKTOK_CLIENT_ID: ${TIKTOK_CLIENT_ID:-}
+      TIKTOK_CLIENT_SECRET: ${TIKTOK_CLIENT_SECRET:-}
+      PINTEREST_CLIENT_ID: ${PINTEREST_CLIENT_ID:-}
+      PINTEREST_CLIENT_SECRET: ${PINTEREST_CLIENT_SECRET:-}
+      X_API_KEY: ${X_API_KEY:-}
+      X_API_SECRET: ${X_API_SECRET:-}
+      X_URL: ${POSTIZ_PUBLIC_URL:?Set POSTIZ_PUBLIC_URL in .env}
+      ENCRYPTION_PROVIDER: local
+      ENCRYPTION_KEY: ${POSTIZ_ENCRYPTION_KEY:?Set POSTIZ_ENCRYPTION_KEY in .env}
+    volumes:
+      - postiz-config:/config
+      - postiz-uploads:/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+    networks: [app, temporal]
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postiz
+      POSTGRES_PASSWORD: ${POSTIZ_DB_PASSWORD:?Missing database password}
+      POSTGRES_DB: postiz
+    volumes:
+      - postiz-db:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postiz -d postiz"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [app]
+  redis:
+    image: redis:7.2-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+    networks: [app]
+  temporal-postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${TEMPORAL_DB_PASSWORD:?Missing Temporal database password}
+    volumes:
+      - temporal-db:/var/lib/postgresql/data
+    networks: [temporal]
+  temporal-elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:7.17.27
+    restart: unless-stopped
+    environment:
+      discovery.type: single-node
+      ES_JAVA_OPTS: -Xms256m -Xmx256m
+      xpack.security.enabled: "false"
+    volumes:
+      - temporal-es:/usr/share/elasticsearch/data
+    networks: [temporal]
+  temporal:
+    image: temporalio/auto-setup:1.28.1
+    restart: unless-stopped
+    environment:
+      DB: postgres12
+      DB_PORT: "5432"
+      POSTGRES_USER: temporal
+      POSTGRES_PWD: ${TEMPORAL_DB_PASSWORD:?Missing Temporal database password}
+      POSTGRES_SEEDS: temporal-postgres
+      DYNAMIC_CONFIG_FILE_PATH: config/dynamicconfig/development-sql.yaml
+      ENABLE_ES: "true"
+      ES_SEEDS: temporal-elasticsearch
+      ES_VERSION: v7
+      TEMPORAL_NAMESPACE: default
+    volumes:
+      - ../../dynamicconfig:/etc/temporal/config/dynamicconfig:ro
+    depends_on: [temporal-postgres, temporal-elasticsearch]
+    networks: [temporal]
+volumes:
+  postiz-config:
+  postiz-uploads:
+  postiz-db:
+  redis-data:
+  temporal-db:
+  temporal-es:
+networks:
+  app:
+  temporal:
